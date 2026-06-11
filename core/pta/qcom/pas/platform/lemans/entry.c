@@ -10,12 +10,14 @@
 
 #include "cdsp0.h"
 #include "cdsp1.h"
+#include "lpass.h"
 
 TEE_Result pas_platform_is_supported(uint32_t pas_id)
 {
 	switch (pas_id) {
 	case PAS_ID_TURING:
 	case PAS_ID_TURING1:
+	case PAS_ID_QDSP6:
 		return TEE_SUCCESS;
 	default:
 		return TEE_ERROR_NOT_SUPPORTED;
@@ -32,6 +34,7 @@ TEE_Result pas_platform_init_image(uint32_t pas_id)
 	switch (pas_id) {
 	case PAS_ID_TURING:
 	case PAS_ID_TURING1:
+	case PAS_ID_QDSP6:
 		return TEE_SUCCESS;
 	default:
 		return TEE_ERROR_NOT_SUPPORTED;
@@ -49,6 +52,9 @@ TEE_Result pas_platform_mem_setup(uint32_t pas_id , uint32_t fw_size,
 		break;
 	case PAS_ID_TURING1:
 		data = cdsp1_get_pas_data();
+		break;
+	case PAS_ID_QDSP6:
+		data = lpass_get_pas_data();
 		break;
 	default:
 		return TEE_ERROR_NOT_SUPPORTED;
@@ -80,6 +86,8 @@ TEE_Result pas_platform_get_resource_table(uint32_t pas_id,
 		return cdsp0_get_resource_table(rt, size);
 	case PAS_ID_TURING1:
 		return cdsp1_get_resource_table(rt, size);
+	case PAS_ID_QDSP6:
+		return lpass_get_resource_table(rt, size);
 	default:
 		return TEE_ERROR_NOT_SUPPORTED;
 	}
@@ -133,6 +141,24 @@ TEE_Result pas_platform_auth_and_reset(uint32_t pas_id)
 			return res;
 
 		return qcom_clock_enable_pas_processor(data->clk_group);
+	case PAS_ID_QDSP6:
+		data = lpass_get_pas_data();
+		if (!data->fw_base)
+			return TEE_ERROR_NO_DATA;
+
+		res = qcom_clock_pas_reset(data->clk_group);
+		if (res != TEE_SUCCESS)
+			return res;
+
+		res = qcom_clock_enable(data->clk_group);
+		if (res != TEE_SUCCESS)
+			return res;
+
+		res = lpass_fw_start();
+		if (res != TEE_SUCCESS)
+			return res;
+
+		return qcom_clock_enable_pas_processor(data->clk_group);
 	default:
 		return TEE_ERROR_NOT_SUPPORTED;
 	}
@@ -145,6 +171,8 @@ TEE_Result pas_platform_shutdown(uint32_t pas_id)
 		return cdsp0_fw_shutdown();
 	case PAS_ID_TURING1:
 		return cdsp1_fw_shutdown();
+	case PAS_ID_QDSP6:
+		return lpass_fw_shutdown();
 	default:
 		return TEE_ERROR_NOT_SUPPORTED;
 	}
