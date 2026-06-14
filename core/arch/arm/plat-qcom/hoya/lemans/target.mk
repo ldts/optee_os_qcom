@@ -19,6 +19,6 @@ ifeq ($(CFG_QCOM_PAS_PTA),y)
 # pool is consumed per mapping, so 60 MB only fits one DSP - the second
 # mem_setup then fails with TEE_ERROR_GENERIC (0xffff0000). Reserve enough for
 # both 48 MB windows plus headroom for other late mappings.
-CFG_RESERVED_VASPACE_SIZE ?= (128 * 1024 * 1024)
+CFG_RESERVED_VASPACE_SIZE ?= (256 * 1024 * 1024)
 CFG_IN_TREE_EARLY_TAS += qcom_pas/cff7d191-7ca0-4784-af13-48223b9a4fbe
 endif
