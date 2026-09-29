@@ -28,6 +28,10 @@ CFG_TPM2_SPI_SE_ID ?= 15
 CFG_TPM2_SPI_CS ?= 0
 CFG_TPM2_SPI_SPEED_HZ ?= 20000000
 
+# DEBUG: the TPM2 SPI backend logs wire-level traffic at INFO/DEBUG level.
+# Raise the core log level so that output is visible during bring-up.
+CFG_TEE_CORE_LOG_LEVEL ?= 4
+
 ifneq ($(CFG_INSECURE),y)
 CFG_QCOM_QFPROM_FUSEPROV ?= y
 endif

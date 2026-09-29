@@ -15,6 +15,7 @@
 #include <drivers/tpm2_ptp_fifo.h>
 #include <drivers/tpm2_spi.h>
 #include <io.h>
+#include <inttypes.h>
 #include <kernel/delay.h>
 #include <spi.h>
 #include <string.h>
@@ -75,11 +76,26 @@ static enum tpm2_result tpm2_spi_xfer_one(struct qup_spi_data *qs, bool read,
 	hdr[2] = (addr >> 8) & 0xff;
 	hdr[3] = addr & 0xff;
 
+	IMSG("TPM2 SPI: %s adr=%#" PRIx32 " (spi=%#" PRIx32 ") len=%u",
+	     read ? "RD" : "WR", adr, addr, len);
+	IMSG("TPM2 SPI: header bytes:");
+	DHEXDUMP(hdr, TPM2_SPI_HDR_LEN);
+	if (!read) {
+		IMSG("TPM2 SPI: write data bytes:");
+		DHEXDUMP(buf, len);
+	}
+
 	chip->ops->start(chip);
 
 	/* Send the 4-byte header; the TPM answers with wait-state bytes. */
-	if (chip->ops->txrx8(chip, hdr, rsp, TPM2_SPI_HDR_LEN) != SPI_OK)
+	if (chip->ops->txrx8(chip, hdr, rsp, TPM2_SPI_HDR_LEN) != SPI_OK) {
+		EMSG("TPM2 SPI: header txrx8 failed");
 		goto out;
+	}
+
+	IMSG("TPM2 SPI: header response (MISO), ready-bit(byte3 LSB)=%u:",
+	     rsp[TPM2_SPI_HDR_LEN - 1] & TPM2_SPI_WAIT_STATE_RDY);
+	DHEXDUMP(rsp, TPM2_SPI_HDR_LEN);
 
 	/*
 	 * Per the PTP spec the LSB of the last header response byte signals
@@ -93,8 +109,12 @@ static enum tpm2_result tpm2_spi_xfer_one(struct qup_spi_data *qs, bool read,
 			uint8_t tx = 0;
 			uint8_t rx = 0;
 
-			if (chip->ops->txrx8(chip, &tx, &rx, 1) != SPI_OK)
+			if (chip->ops->txrx8(chip, &tx, &rx, 1) != SPI_OK) {
+				EMSG("TPM2 SPI: wait-state txrx8 failed");
 				goto out;
+			}
+
+			IMSG("TPM2 SPI: wait-state[%u] MISO=%#02x", retries, rx);
 
 			if (rx & TPM2_SPI_WAIT_STATE_RDY) {
 				ready = true;
@@ -106,22 +126,33 @@ static enum tpm2_result tpm2_spi_xfer_one(struct qup_spi_data *qs, bool read,
 	}
 
 	if (!ready) {
+		EMSG("TPM2 SPI: wait-state never asserted after %u polls",
+		     TPM2_SPI_WAIT_RETRIES);
 		ret = TPM2_ERR_TIMEOUT;
 		goto out;
 	}
 
 	/* Data phase; drive the unused direction with zeros (full-duplex). */
 	if (read) {
-		if (chip->ops->txrx8(chip, zero, buf, len) != SPI_OK)
+		if (chip->ops->txrx8(chip, zero, buf, len) != SPI_OK) {
+			EMSG("TPM2 SPI: read data txrx8 failed");
 			goto out;
+		}
+		IMSG("TPM2 SPI: read data bytes (MISO):");
+		DHEXDUMP(buf, len);
 	} else {
-		if (chip->ops->txrx8(chip, buf, zero, len) != SPI_OK)
+		if (chip->ops->txrx8(chip, buf, zero, len) != SPI_OK) {
+			EMSG("TPM2 SPI: write data txrx8 failed");
 			goto out;
+		}
 	}
 
 	ret = TPM2_OK;
 out:
 	chip->ops->end(chip);
+
+	if (ret)
+		EMSG("TPM2 SPI: xfer adr=%#" PRIx32 " failed, ret=%d", adr, ret);
 
 	return ret;
 }
@@ -208,17 +239,39 @@ static struct tpm2_chip tpm2_spi_chip = {
 enum tpm2_result tpm2_spi_init(struct qup_spi_data *qs)
 {
 	enum tpm2_result ret = TPM2_OK;
+	uint32_t did_vid = 0;
+	uint8_t access = 0;
 
 	assert(qs);
 	tpm2_spi_qs = qs;
 
-	DMSG("TPM2 SPI backend on GENI SE id %u cs %u", qs->id, qs->cs);
+	IMSG("TPM2 SPI backend on GENI SE id %u cs %u mode %u speed %u Hz",
+	     qs->id, qs->cs, qs->mode, qs->speed_hz);
+
+	/*
+	 * Raw probe before the FIFO state machine runs: read DID_VID and the
+	 * ACCESS register directly. DID_VID is a fixed vendor/device ID and is
+	 * the definitive "is a TPM physically responding on this bus" check.
+	 * Non-zero, non-0xffffffff means the wire and framing are basically
+	 * working; 0x00000000 means MISO is dead (device unpowered / in reset /
+	 * pins not muxed); 0xffffffff means MISO is floating high.
+	 */
+	ret = tpm2_spi_rx32(&tpm2_spi_chip, TPM2_DID_VID(0), &did_vid);
+	IMSG("TPM2 SPI: DID_VID raw read ret=%d value=%#" PRIx32, ret, did_vid);
+
+	ret = tpm2_spi_rx8(&tpm2_spi_chip, TPM2_ACCESS(0), sizeof(access),
+			   &access);
+	IMSG("TPM2 SPI: ACCESS raw read ret=%d value=%#02x (VALID=%u active=%u)",
+	     ret, access, !!(access & TPM2_ACCESS_VALID),
+	     !!(access & TPM2_ACCESS_ACTIVE_LOCALITY));
 
 	ret = tpm2_chip_register(&tpm2_spi_chip);
 	if (ret) {
 		EMSG("TPM2 SPI chip register failed: %d", ret);
 		return ret;
 	}
+
+	IMSG("TPM2 SPI chip registered");
 
 	return TPM2_OK;
 }
