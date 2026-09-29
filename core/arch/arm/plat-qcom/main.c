@@ -11,6 +11,14 @@
 #include <mm/core_mmu.h>
 #include <platform_config.h>
 
+#if defined(CFG_DRIVERS_TPM2_SPI)
+#include <drivers/qcom_geni_spi.h>
+#include <drivers/tpm2_spi.h>
+#include <initcall.h>
+#include <inttypes.h>
+#include <spi.h>
+#endif
+
 #include "diag_log.h"
 
 /*
@@ -76,3 +84,37 @@ void boot_secondary_init_intc(void)
 {
 	gic_init_per_cpu();
 }
+
+#if defined(CFG_DRIVERS_TPM2_SPI)
+static struct qup_spi_data tpm2_spi_qs;
+
+static TEE_Result init_tpm2_spi(void)
+{
+	TEE_Result res = TEE_SUCCESS;
+
+	res = qup_spi_init(&tpm2_spi_qs, CFG_TPM2_SPI_SE_ID);
+	if (res) {
+		EMSG("TPM2: qup_spi_init(%u) failed: %#" PRIx32,
+		     (unsigned int)CFG_TPM2_SPI_SE_ID, res);
+		return res;
+	}
+
+	tpm2_spi_qs.speed_hz = CFG_TPM2_SPI_SPEED_HZ;
+	tpm2_spi_qs.bits_per_word = 8;
+	tpm2_spi_qs.mode = SPI_MODE0;
+	tpm2_spi_qs.cs = CFG_TPM2_SPI_CS;
+	tpm2_spi_qs.cs_high = false;
+	tpm2_spi_qs.loopback = false;
+	tpm2_spi_qs.chip.ops->configure(&tpm2_spi_qs.chip);
+
+	if (tpm2_spi_init(&tpm2_spi_qs)) {
+		EMSG("TPM2: chip registration failed");
+		return TEE_ERROR_GENERIC;
+	}
+
+	DMSG("TPM2 SPI chip initialized");
+
+	return TEE_SUCCESS;
+}
+driver_init(init_tpm2_spi);
+#endif /* defined(CFG_DRIVERS_TPM2_SPI) */
